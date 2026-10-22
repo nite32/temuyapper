@@ -40,6 +40,7 @@ let roomUnsubscribe;
 let timerHandle;
 let toastHandle;
 let advancing = false;
+let localRatingRaterUid;
 
 function escapeHtml(value) {
   return String(value ?? '').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]);
@@ -83,10 +84,67 @@ function renderTopicOptions() {
 function openSession(topic) {
   renderTopicOptions();
   if (topic) $('#sessionTopic').value = topic;
-  $('#backendNote').innerHTML = hasFirebaseConfig
-    ? 'Sesi online menggunakan database Firebase. Bagikan kode ruang kepada teman.'
-    : '<span class="config-warning">Mode pratinjau lokal aktif. Sesi online dapat digunakan setelah konfigurasi Firebase ditambahkan.</span>';
+  syncSessionMode();
   sessionDialog.showModal();
+}
+
+function selectedSessionMode() { return $('input[name="sessionMode"]:checked').value; }
+
+function syncSessionMode() {
+  const onePhone = selectedSessionMode() === 'one-phone';
+  $('#onlineHostField').hidden = onePhone;
+  $('#onePhonePeople').hidden = !onePhone;
+  $('#onlineJoin').hidden = onePhone;
+  $('#createSession').innerHTML = onePhone ? 'Mulai sesi satu HP <span>↗</span>' : 'Buat sesi <span>↗</span>';
+  $('#backendNote').innerHTML = onePhone
+    ? 'Mode ini tidak memerlukan Firebase. Maksimal 10 peserta menggunakan perangkat yang sama.'
+    : hasFirebaseConfig
+      ? 'Sesi online menggunakan database Firebase. Bagikan kode ruang kepada teman.'
+      : '<span class="config-warning">Tanpa konfigurasi Firebase, sesi online hanya bisa dicoba sebagai pratinjau lokal.</span>';
+}
+
+function renderParticipantInputs(names = null) {
+  const values = names || [...$('#participantNameFields').querySelectorAll('input')].map(input => input.value);
+  while (values.length < 2) values.push(`Peserta ${values.length + 1}`);
+  $('#participantNameFields').innerHTML = values.slice(0, 10).map((name, index) => `
+    <div class="participant-input-row"><label class="sr-only" for="participant-${index}">Nama peserta ${index + 1}</label>
+      <input id="participant-${index}" class="participant-name-input" maxlength="24" value="${escapeHtml(name)}" placeholder="Nama peserta ${index + 1}">
+      <button class="remove-participant" type="button" data-remove-participant="${index}" aria-label="Hapus peserta ${index + 1}" ${values.length <= 2 ? 'disabled' : ''}>×</button>
+    </div>`).join('');
+  const count = $('#participantNameFields').querySelectorAll('input').length;
+  $('#participantCount').textContent = `${count} / 10`;
+  $('#addParticipant').disabled = count >= 10;
+  $$('[data-remove-participant]').forEach(button => button.addEventListener('click', () => {
+    const next = [...$('#participantNameFields').querySelectorAll('input')].map(input => input.value);
+    next.splice(Number(button.dataset.removeParticipant), 1);
+    renderParticipantInputs(next);
+  }));
+}
+
+function createOnePhoneRoom() {
+  const names = [...$('#participantNameFields').querySelectorAll('input')].map(input => input.value.trim());
+  if (names.length < 2 || names.length > 10 || names.some(name => !name)) {
+    showToast('Isi nama semua peserta. Mode satu HP memerlukan 2–10 orang.');
+    return;
+  }
+  const primaryTopic = $('#sessionTopic').value;
+  const otherTopics = allTopics().map(topic => topic.text).filter(text => text !== primaryTopic).sort(() => Math.random() - 0.5);
+  const assignedTopics = [primaryTopic, ...otherTopics].slice(0, names.length);
+  const participants = Object.fromEntries(names.map((name, index) => [`person-${index + 1}`, {
+    name: name.slice(0, 24), topic: assignedTopics[index], joinedAt: Date.now(), scores: {},
+  }]));
+  const uid = `onephone-${Date.now()}`;
+  const room = {
+    code: randomCode(), mode: 'one-phone', local: true, host: uid, createdAt: Date.now(),
+    topic: primaryTopic, researchMins: Math.max(1, Math.min(60, Number($('#researchMins').value) || 5)),
+    speakMins: Math.max(1, Math.min(30, Number($('#speakMins').value) || 2)),
+    phase: 'waiting', phaseEndsAt: null, participants,
+  };
+  authUser = { uid };
+  localRatingRaterUid = null;
+  saveLocalRoom(room);
+  sessionDialog.close();
+  watchRoom(room.code);
 }
 
 function getLocalRooms() {
@@ -141,6 +199,7 @@ async function apiRequest(path, payload) {
 
 async function createSession(event) {
   event.preventDefault();
+  if (selectedSessionMode() === 'one-phone') { createOnePhoneRoom(); return; }
   const name = $('#hostName').value.trim() || 'Tuan rumah';
   const topic = $('#sessionTopic').value;
   const researchMins = Math.max(1, Math.min(60, Number($('#researchMins').value) || 5));
@@ -222,14 +281,14 @@ function watchRoom(code) {
 
 function renderRoom(room) {
   const participants = Object.entries(room.participants || {});
-  if (!room.participants?.[authUser?.uid]) return;
+  if (!room.participants?.[authUser?.uid] && room.mode !== 'one-phone') return;
   const isHost = room.host === authUser.uid;
   const active = room.phase === 'research' || room.phase === 'speaking';
   const phaseName = { waiting: 'SESI SIAP', research: 'WAKTU RISET', speaking: 'WAKTU BICARA', done: 'SESI SELESAI' }[room.phase] || 'SESI';
   const title = room.phase === 'done' ? ['Obrolan yang', 'berkesan.'] : ['Ruang untuk', 'berbagi.'];
-  let html = `${room.local ? '<p class="config-warning">Pratinjau lokal di browser ini. Konfigurasikan Firebase agar kode undangan bekerja secara online.</p>' : ''}
+  let html = `${room.mode === 'one-phone' ? '<p class="config-warning">Mode satu HP · semua peserta berbagi perangkat ini.</p>' : room.local ? '<p class="config-warning">Pratinjau lokal di browser ini. Konfigurasikan Firebase agar kode undangan bekerja secara online.</p>' : ''}
     <div class="eyebrow muted">${phaseName}</div><h2>${title[0]} <em>${title[1]}</em></h2>
-    <div class="room-code-display" aria-label="Kode sesi ${escapeHtml(room.code)}">${escapeHtml(room.code)}</div>
+    ${room.local ? '' : `<div class="room-code-display" aria-label="Kode sesi ${escapeHtml(room.code)}">${escapeHtml(room.code)}</div>`}
     <div class="session-meta"><span class="pill">${escapeHtml(room.topic)}</span><span class="pill">${room.researchMins} mnt riset</span><span class="pill">${room.speakMins} mnt bicara</span><span class="pill">${participants.length} peserta</span></div>`;
   html += active
     ? `<div class="countdown" id="countdown" aria-live="polite">--:--</div><p class="session-status">${room.phase === 'research' ? 'Waktu riset. Siapkan pendapatmu.' : 'Giliran bicara. Dengarkan dan tanggapi.'}</p>`
@@ -238,21 +297,25 @@ function renderRoom(room) {
     <div class="participant"><span>${escapeHtml(participant.name)}${uid === room.host ? ' <small>· tuan rumah</small>' : ''}<br><small>${escapeHtml(participant.topic || room.topic)}</small></span><span aria-hidden="true">●</span></div>`).join('')}</div>`;
 
   if (room.phase === 'done') {
-    const others = participants.filter(([uid]) => uid !== authUser.uid);
+    if (room.mode === 'one-phone' && !participants.some(([uid]) => uid === localRatingRaterUid)) localRatingRaterUid = participants[0]?.[0];
+    const raterUid = room.mode === 'one-phone' ? localRatingRaterUid : authUser.uid;
+    const others = participants.filter(([uid]) => uid !== raterUid);
     html += `<h3 class="session-topic-heading">Apresiasi kontribusi</h3><p class="integration-note">Beri nilai 1–5 untuk cara teman menyampaikan ide dan mendengarkan.</p>`;
-    html += others.length ? others.map(([uid, participant]) => `<div class="score-row"><span>${escapeHtml(participant.name)}</span><span class="score-buttons">${[1, 2, 3, 4, 5].map(value => `<button class="${participant.scores?.[authUser.uid] === value ? 'selected' : ''}" data-score-user="${escapeHtml(uid)}" data-score="${value}" aria-label="Beri nilai ${value} kepada ${escapeHtml(participant.name)}">${value}</button>`).join('')}</span></div>`).join('') : '<p class="empty-state">Belum ada peserta lain untuk dinilai.</p>';
+    if (room.mode === 'one-phone') html += `<label for="ratingRater">Pilih peserta yang sedang memberi nilai</label><select id="ratingRater">${participants.map(([uid, participant]) => `<option value="${escapeHtml(uid)}" ${uid === raterUid ? 'selected' : ''}>${escapeHtml(participant.name)}</option>`).join('')}</select>`;
+    html += others.length ? others.map(([uid, participant]) => `<div class="score-row"><span>${escapeHtml(participant.name)}</span><span class="score-buttons">${[1, 2, 3, 4, 5].map(value => `<button class="${participant.scores?.[raterUid] === value ? 'selected' : ''}" data-score-user="${escapeHtml(uid)}" data-score="${value}" aria-label="Beri nilai ${value} kepada ${escapeHtml(participant.name)}">${value}</button>`).join('')}</span></div>`).join('') : '<p class="empty-state">Belum ada peserta lain untuk dinilai.</p>';
   }
 
   const nextLabel = { waiting: 'Mulai riset', research: 'Mulai bicara', speaking: 'Akhiri & beri nilai' }[room.phase];
-  html += `<div class="session-actions">${isHost && nextLabel ? `<button class="button primary" id="startPhase">${nextLabel} <span>↗</span></button>` : ''}<button class="button outline" id="copyCode">Salin kode</button></div>
+  html += `<div class="session-actions">${isHost && nextLabel ? `<button class="button primary" id="startPhase">${nextLabel} <span>↗</span></button>` : ''}${room.local ? '' : '<button class="button outline" id="copyCode">Salin kode</button>'}</div>
     <p class="integration-note">Diskusi berlangsung langsung atau melalui Discord. Situs ini tidak meminta akses mikrofon.</p>`;
 
   $('#activeContent').innerHTML = html;
-  $('#copyCode').onclick = async () => {
+  if ($('#copyCode')) $('#copyCode').onclick = async () => {
     try { await navigator.clipboard.writeText(room.code); showToast('Kode sesi disalin.'); }
     catch { showToast(`Kode sesi: ${room.code}`); }
   };
   $('#startPhase')?.addEventListener('click', () => advancePhase(room));
+  $('#ratingRater')?.addEventListener('change', event => { localRatingRaterUid = event.target.value; renderRoom(room); });
   $$('[data-score-user]').forEach(button => button.addEventListener('click', () => saveScore(button.dataset.scoreUser, Number(button.dataset.score))));
 
   clearInterval(timerHandle);
@@ -298,7 +361,12 @@ async function autoAdvance(room) { if (!advancing) await advancePhase(room); }
 
 async function saveScore(participantUid, score) {
   try {
-    if (currentRoomCode && !hasFirebaseConfig) {
+    const localRoom = currentRoomCode ? getLocalRoom(currentRoomCode) : null;
+    if (localRoom?.mode === 'one-phone') {
+      localRoom.participants[participantUid].scores[localRatingRaterUid] = score;
+      saveLocalRoom(localRoom);
+      renderRoom(localRoom);
+    } else if (localRoom) {
       const room = getLocalRoom(currentRoomCode);
       room.participants[participantUid].scores[authUser.uid] = score;
       saveLocalRoom(room);
@@ -315,6 +383,14 @@ async function saveScore(participantUid, score) {
 
 renderTopicGrid();
 renderTopicOptions();
+renderParticipantInputs(['Peserta 1', 'Peserta 2']);
+$$('input[name="sessionMode"]').forEach(input => input.addEventListener('change', syncSessionMode));
+$('#addParticipant').addEventListener('click', () => {
+  const names = [...$('#participantNameFields').querySelectorAll('input')].map(input => input.value);
+  if (names.length >= 10) return;
+  names.push(`Peserta ${names.length + 1}`);
+  renderParticipantInputs(names);
+});
 ['#heroStart', '#navStart', '#bottomStart'].forEach(selector => $(selector).addEventListener('click', () => openSession()));
 $('#shuffleBtn').addEventListener('click', () => {
   const tiles = $$('.topic-tile');
