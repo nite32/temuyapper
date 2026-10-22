@@ -665,7 +665,7 @@ footer
 .close
 {
   position:absolute;
-  margin-top: 1px;
+  margin-top: 2px;
   border-radius: 6px;
   right:14px;
   top:11px;
