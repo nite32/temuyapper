@@ -42,6 +42,7 @@ Vercel membangun situs dan menjalankan API; Firebase menyediakan identitas anoni
 ## Fitur dan batas saat ini
 
 - Koleksi topik bawaan, pengacak, dan topik pribadi yang disimpan pada browser pengunjung.
+- Mode **Satu HP** untuk 2–10 orang: masukkan nama, setiap peserta mendapat topik berbeda, lalu gunakan timer riset/bicara dan penilaian pada perangkat yang sama. Mode ini tidak perlu akun atau Firebase; datanya tersimpan lokal di browser. Situs Vercel tetap harus dibuka saat ada koneksi internet.
 - Ruang dengan kode undangan, peserta, timer riset dan bicara, tahap diskusi, serta penilaian kontribusi.
 - API memverifikasi Firebase ID token, memeriksa input, membatasi perubahan tahap untuk tuan rumah, dan hanya mengizinkan peserta menilai orang lain setelah sesi selesai.
 - Endpoint backend: `POST /api/rooms`, `POST /api/rooms/:code/join`, `POST /api/rooms/:code/phase`, `POST /api/rooms/:code/score`.
@@ -53,6 +54,7 @@ Vercel membangun situs dan menjalankan API; Firebase menyediakan identitas anoni
 
 - `index.html` — struktur halaman dan dialog
 - `styles.css` — tampilan responsif
+- `session.css` — gaya pemilih mode dan daftar peserta satu perangkat
 - `app.js` — interaksi antarmuka dan sesi Firebase
 - `api/rooms/` — Vercel Functions untuk operasi sesi
 - `lib/server/` — verifikasi identitas dan inisialisasi Firebase Admin
